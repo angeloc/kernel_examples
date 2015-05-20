@@ -9,6 +9,7 @@
 #include <linux/interrupt.h>
 
 #define PIO_LED	40
+#define PIO_IRQ	81
 
 #define sysfs_dir "helloled"
 
@@ -17,6 +18,8 @@ DECLARE_DELAYED_WORK(helloled_task, blink_led);
 static bool run;
 
 static struct kobject *hello_obj = NULL;
+
+static int irq_num;
 
 static ssize_t set_value(struct device *dev,
 			struct device_attribute *attr,
@@ -72,6 +75,20 @@ static void blink_led(struct work_struct *w) {
 	if (run) schedule_delayed_work(&helloled_task, HZ);
 }
 
+static irqreturn_t helloled_isr(int irq, void *data)
+{
+	pr_alert ("helloled: handling irq\n");
+
+	if (run) {
+		run = 0;
+	} else {
+		run = 1;
+		schedule_delayed_work(&helloled_task, HZ);
+	}
+
+	return IRQ_HANDLED;
+}
+
 static int __init hello_init(void) {
 	int ret = 0;
 
@@ -84,6 +101,19 @@ static int __init hello_init(void) {
 	ret = gpio_direction_output(PIO_LED, 1);
 	if (ret != 0) {
 		pr_alert("helloled: setting direction failed\n");
+		return ret;
+	}
+
+	ret = gpio_to_irq(PIO_IRQ);
+	if (ret < 0) {
+		pr_alert ("helloled: getting irq for pio 81 failed with result %d\n", ret);
+		return ret;
+	}
+	irq_num = ret;
+
+	ret = request_irq(irq_num, helloled_isr, IRQF_TRIGGER_RISING, "helloled.trigger", NULL);
+	if(ret) {
+		pr_alert ("helloled: requesting irq for pio 81 failed with result %d\n", ret);
 		return ret;
 	}
 
@@ -115,6 +145,7 @@ static void __exit hello_exit(void)
 	flush_delayed_work(&helloled_task);
 	cancel_delayed_work_sync(&helloled_task);
 	gpio_free(PIO_LED);
+	free_irq(irq_num, NULL);
 	kobject_put(hello_obj);
 	pr_alert("helloled: Very useful LED driver down\n");
 }
